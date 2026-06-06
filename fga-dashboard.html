@@ -254,9 +254,12 @@
 // =============================================
 const SHEET_ID = '1h_JRdSu-oM9yjWhXF09KKNxkIv8ex8wFKf2IG7fgtLU';
 const SHEET_NAME = 'FGA';
+const SHEET_GID = '382317574';
+const CONS_SHEET_NAME = 'Cons FGA';
+const CONS_SHEET_GID = '287007726';
 
 // Global state
-let allData = [];
+let allData = { survey: [], cons: [] };
 let currentTab = 'survey';
 let selectedWO_survey = 'ALL';
 let selectedWO_cons = 'ALL';
@@ -264,10 +267,10 @@ let selectedWO_cons = 'ALL';
 // =============================================
 // FETCH DATA
 // =============================================
-async function fetchSheet(sheetName) {
+async function fetchSheet(sheetName, gid) {
   return new Promise(async (resolve, reject) => {
     try {
-      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(sheetName)}&gid=382317574`;
+      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(sheetName)}&gid=${gid}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const csv = await resp.text();
@@ -372,12 +375,25 @@ function getUniqueWOs(data) {
 // =============================================
 async function init() {
   try {
-    const raw = await fetchSheet(SHEET_NAME);
+    const raw = await fetchSheet(SHEET_NAME, SHEET_GID);
 
-    // Map both survey and cons from same sheet
-    allData = raw
+    // Map survey data
+    const surveyData = raw
       .filter(r => r['No'] && r['Project / Location Name'])
-      .map(r => ({ survey: mapSurveyRow(r), cons: mapConsRow(r) }));
+      .map(r => mapSurveyRow(r));
+
+    // Fetch cons sheet separately
+    let consData = [];
+    try {
+      const rawCons = await fetchSheet(CONS_SHEET_NAME, CONS_SHEET_GID);
+      consData = rawCons
+        .filter(r => r['Kode Working Order'] && r['Nama Site'])
+        .map(r => mapConsRowFGA(r));
+    } catch(e) {
+      console.warn('Cons sheet belum ada data:', e);
+    }
+
+    allData = { survey: surveyData, cons: consData };
 
     document.getElementById('survey-loading').style.display = 'none';
     document.getElementById('survey-content').style.display = 'block';
@@ -399,11 +415,47 @@ async function init() {
 }
 
 // =============================================
+// MAP CONS ROW FROM SEPARATE SHEET
+// =============================================
+function mapConsRowFGA(r) {
+  const isBSS = r['Tipe WO Cons'] && r['Tipe WO Cons'].includes('BSS') && !r['Tipe WO Cons'].includes('EVCS');
+  const keys = isBSS ? ['Charger','Panel','Cable'] : ['Pondasi','Charger','Panel','Cable','APAR','Parking Lot'];
+  const vals = keys.map(k => {
+    const v = r[k];
+    if (!v || v === '') return null;
+    const n = parseFloat(v);
+    return isNaN(n) ? null : Math.min(100, Math.max(0, n));
+  });
+  const filled = vals.filter(v => v !== null);
+  const finish = filled.length ? Math.round(filled.reduce((a,b) => a+b, 0) / keys.length) : 0;
+
+  return {
+    no: r['No'] || '',
+    site: r['Nama Site'] || '',
+    area: r['Area'] || '',
+    wo: r['Kode Working Order'] || '',
+    tipe: r['Tipe WO Cons'] || '',
+    lot: r['Total LOT'] || '',
+    evcs: r['Tipe WO Cons'] && r['Tipe WO Cons'].includes('EVCS') ? 1 : 0,
+    bss: r['Tipe WO Cons'] && r['Tipe WO Cons'].includes('BSS') ? 1 : 0,
+    pondasi: r['Pondasi'] || '',
+    charger: r['Charger'] || '',
+    panel: r['Panel'] || '',
+    cable: r['Cable'] || '',
+    apar: r['APAR'] || '',
+    parking: r['Parking Lot'] || '',
+    finish: finish,
+    remarks: r['Update / Remarks'] || '',
+    status: r['Status WO Completion'] || 'Belum Diisi',
+  };
+}
+
+// =============================================
 // WO CONTROLS
 // =============================================
 function initWOControls() {
-  const surveyData = allData.map(d => d.survey).filter(d => d.wo);
-  const consData = allData.map(d => d.cons).filter(d => d.wo);
+  const surveyData = allData.survey.filter(d => d.wo);
+  const consData = allData.cons.filter(d => d.wo);
 
   const data = currentTab === 'survey' ? surveyData : consData;
   const wos = getUniqueWOs(data);
@@ -431,9 +483,9 @@ function onSelectWO(tab, wo) {
 // TAB SWITCHING
 // =============================================
 function updateHeaderTotal() {
-  const surveyData = allData.map(d => d.survey).filter(d => d.wo && d.site);
-  const consData = allData.map(d => d.cons).filter(d => d.wo && d.site);
-  const total = currentTab === 'survey' ? surveyData.length : consData.length;
+  const total = currentTab === 'survey'
+    ? allData.survey.filter(d => d.wo && d.site).length
+    : allData.cons.filter(d => d.wo && d.site).length;
   setText('header-total', total);
 }
 
@@ -458,7 +510,7 @@ function renderCurrentTab() {
 // RENDER SURVEY
 // =============================================
 function renderSurvey() {
-  const all = allData.map(d => d.survey).filter(d => d.wo && d.site);
+  const all = allData.survey.filter(d => d.wo && d.site);
   const data = selectedWO_survey === 'ALL' ? all : all.filter(d => d.wo === selectedWO_survey);
   const wos = getUniqueWOs(all);
   const total = data.length;
@@ -523,12 +575,12 @@ function renderSurvey() {
 // RENDER CONS
 // =============================================
 function renderCons() {
-  const all = allData.map(d => d.cons).filter(d => d.wo && d.site);
+  const all = allData.cons.filter(d => d.wo && d.site);
   const data = selectedWO_cons === 'ALL' ? all : all.filter(d => d.wo === selectedWO_cons);
   const wos = getUniqueWOs(all);
   const total = data.length;
 
-  const done = data.filter(d => d.done_date && d.done_date !== '').length;
+  const done = data.filter(d => d.finish >= 100).length;
   const canceled = data.filter(d => d.status?.toLowerCase().includes('canceled') || d.status?.toLowerCase().includes('issue')).length;
   const totalEVCS = data.reduce((s, d) => s + (d.evcs||0), 0);
   const totalBSS = data.reduce((s, d) => s + (d.bss||0), 0);
@@ -544,8 +596,9 @@ function renderCons() {
   setText('c-kpi-bss', totalBSS);
   setText('c-site-count', `${total} sites`);
 
-  const avgFinish = total ? Math.round(done/total*100) : 0;
+  const avgFinish = total ? Math.round(data.reduce((s,d) => s + (d.finish||0), 0) / total) : 0;
   setText('c-kpi-avg', avgFinish + '%');
+  setText('c-kpi-done-pct', total ? `${Math.round(done/total*100)}% dari total` : '—');
   setText('c-overall-pct', avgFinish + '%');
   document.getElementById('c-overall-bar').style.width = avgFinish + '%';
 
@@ -554,8 +607,7 @@ function renderCons() {
   const consWOs = getUniqueWOs(all.filter(d => d.wo));
   barsEl.innerHTML = consWOs.filter(wo => selectedWO_cons==='ALL' || wo===selectedWO_cons).map(wo => {
     const wdata = all.filter(d => d.wo === wo);
-    const wDone = wdata.filter(d => d.done_date && d.done_date !== '').length;
-    const pct = wdata.length ? Math.round(wDone/wdata.length*100) : 0;
+    const pct = wdata.length ? Math.round(wdata.reduce((s,d) => s+(d.finish||0),0) / wdata.length) : 0;
     return `<div class="wo-bar">
       <div class="wo-bar-top">
         <span class="wo-label">${shortWO(wo)}</span>
