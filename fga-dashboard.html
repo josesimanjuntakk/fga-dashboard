@@ -267,7 +267,7 @@ let selectedWO_cons = 'ALL';
 // =============================================
 // FETCH DATA
 // =============================================
-async function fetchSheet(sheetName, gid) {
+async function fetchSheet(sheetName, gid, skipFirstRow = false) {
   return new Promise(async (resolve, reject) => {
     try {
       const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(sheetName)}&gid=${gid}`;
@@ -290,8 +290,9 @@ async function fetchSheet(sheetName, gid) {
         return result;
       };
 
-      const headers = parseCSVLine(lines[1]); // row 2 = actual headers
-      const rows = lines.slice(2).map(line => {
+      const headerRow = skipFirstRow ? 1 : 0;
+      const headers = parseCSVLine(lines[headerRow]);
+      const rows = lines.slice(headerRow + 1).map(line => {
         const vals = parseCSVLine(line);
         const obj = {};
         headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim(); });
@@ -375,7 +376,7 @@ function getUniqueWOs(data) {
 // =============================================
 async function init() {
   try {
-    const raw = await fetchSheet(SHEET_NAME, SHEET_GID);
+    const raw = await fetchSheet(SHEET_NAME, SHEET_GID, true); // FGA has company name in row 1
 
     // Map survey data
     const surveyData = raw
@@ -385,7 +386,7 @@ async function init() {
     // Fetch cons sheet separately
     let consData = [];
     try {
-      const rawCons = await fetchSheet(CONS_SHEET_NAME, CONS_SHEET_GID);
+      const rawCons = await fetchSheet(CONS_SHEET_NAME, CONS_SHEET_GID, false); // Cons FGA header is row 1
       consData = rawCons
         .filter(r => r['Kode Working Order'] && r['Nama Site'])
         .map(r => mapConsRowFGA(r));
